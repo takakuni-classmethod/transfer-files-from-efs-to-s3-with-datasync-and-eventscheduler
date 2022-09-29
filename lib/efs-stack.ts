@@ -17,18 +17,17 @@ export class EfsStack extends Stack {
     super(scope, id, props);
 
     // CloudWatch Logs for VPC Flow Logs
-    const vpcFlowLogsLogGroup = new logs.LogGroup(
-      this,
-      "VPC Flow Logs Log Group",
-      {
+    const vpcFlowLogsLogGroup = new logs.LogGroup(this, "VPC Flow Logs Log Group", {
         logGroupName: `/aws/vendedlogs/vpcFlowLogs-${this.stackName}`,
         retention: logs.RetentionDays.ONE_WEEK,
+        removalPolicy: RemovalPolicy.DESTROY
       }
     );
 
     // CloudWatch Logs for DataSync
     const datasyncLogGroup = new logs.LogGroup(this, "DataSync Log Group", {
       retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: RemovalPolicy.DESTROY
     });
 
     // VPC Flow Logs IAM Role
@@ -129,6 +128,7 @@ export class EfsStack extends Stack {
       vpcSubnets: vpc.selectSubnets({
         subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
       }),
+      removalPolicy: RemovalPolicy.DESTROY
     });
 
     fileSystem.connections.allowDefaultPortFrom(instance);
@@ -200,6 +200,7 @@ export class EfsStack extends Stack {
           }:security-group/${Fn.select(0, cfnInstance.securityGroupIds)}`,
         ],
         subnetArn: `arn:aws:ec2:${this.region}:${this.account}:subnet/${vpc.isolatedSubnets[0].subnetId}`,
+        // subnetArn: vpc.isolatedSubnets[0].subnetId,
       },
       efsFilesystemArn: fileSystem.fileSystemArn,
       inTransitEncryption: "TLS1_2",
