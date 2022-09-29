@@ -200,7 +200,6 @@ export class EfsStack extends Stack {
           }:security-group/${Fn.select(0, cfnInstance.securityGroupIds)}`,
         ],
         subnetArn: `arn:aws:ec2:${this.region}:${this.account}:subnet/${vpc.isolatedSubnets[0].subnetId}`,
-        // subnetArn: vpc.isolatedSubnets[0].subnetId,
       },
       efsFilesystemArn: fileSystem.fileSystemArn,
       inTransitEncryption: "TLS1_2",
