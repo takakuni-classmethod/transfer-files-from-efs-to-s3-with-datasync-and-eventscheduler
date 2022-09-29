@@ -9,6 +9,10 @@ import {
   aws_efs as efs,
   aws_s3 as s3,
   aws_datasync as datasync,
+  aws_lambda as lambda,
+  aws_events as events,
+  aws_events_targets as targets,
+  Duration
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
 
@@ -80,14 +84,14 @@ export class EfsStack extends Stack {
     const fileSystem = new efs.CfnFileSystem(this, "EfsFileSystem", {
       lifecyclePolicies: [
         {
-          transitionToIa: 'AFTER_14_DAYS',
+          transitionToIa: "AFTER_14_DAYS",
         },
         {
-          transitionToPrimaryStorageClass: 'AFTER_1_ACCESS'
+          transitionToPrimaryStorageClass: "AFTER_1_ACCESS"
         }
       ],
       encrypted: true,
-      performanceMode: 'generalPurpose',
+      performanceMode: "generalPurpose",
     });
     fileSystem.applyRemovalPolicy(RemovalPolicy.DESTROY);
 
@@ -131,6 +135,7 @@ export class EfsStack extends Stack {
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
       removalPolicy: RemovalPolicy.DESTROY,
+      autoDeleteObjects: true
     });
 
     const datasyncIAMRole = new iam.Role(this, "Datasync IAM Role", {
@@ -193,7 +198,7 @@ export class EfsStack extends Stack {
       subdirectory: "/",
     });
 
-    const task = new datasync.CfnTask(this, "DataSync Task", {
+    const datasyncTask = new datasync.CfnTask(this, "DataSync Task", {
       name: "efs-to-s3",
       sourceLocationArn: locationEFS.attrLocationArn,
       destinationLocationArn: locationS3.attrLocationArn,
@@ -214,15 +219,16 @@ export class EfsStack extends Stack {
         verifyMode: "ONLY_FILES_TRANSFERRED",
       },
     });
+
     datasyncLogGroup.addToResourcePolicy(new iam.PolicyStatement({
-      actions: ['logs:CreateLogStream', 'logs:PutLogEvents'],
-      principals: [new iam.ServicePrincipal('datasync.amazonaws.com')],
+      actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+      principals: [new iam.ServicePrincipal("datasync.amazonaws.com")],
       conditions: {
         ArnLike: {
-          'aws:SourceArn': [task.attrTaskArn]
+          "aws:SourceArn": [datasyncTask.attrTaskArn]
         },
         StringEquals: {
-          'aws:SourceAccount': this.account
+          "aws:SourceAccount": this.account
         }
       },
       resources: [datasyncLogGroup.logGroupArn]
@@ -232,5 +238,55 @@ export class EfsStack extends Stack {
       vpc,
       allowAllOutbound: false,
     });
-  }
+
+    // IAM Resources for Lambda Function
+    const lambdaRole = new iam.Role(this, "Lambda IAM Role", {
+      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName(
+          "service-role/AWSLambdaBasicExecutionRole"
+        )
+      ]
+    });
+
+    const lambdaPolicy = new iam.ManagedPolicy(this, "Lambda IAM Policy", {
+      statements: [
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ["datasync:StartTaskExecution"],
+          resources: [datasyncTask.attrTaskArn]
+        }),
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ["ec2:DescribeNetworkInterfaces"],
+          resources: ["*"]
+        })
+      ],
+      roles: [lambdaRole]
+    });
+
+    // Lambda Function
+    const lambdaFunciton = new lambda.Function(this, "Lambda Function", {
+      runtime: lambda.Runtime.PYTHON_3_9,
+      handler: "index.lambda_handler",
+      role: lambdaRole,
+      code: lambda.Code.fromAsset("lambda"),
+      environment: {
+        taskArn: datasyncTask.attrTaskArn
+      }
+    });
+
+    // CloudWatch Logs for Lambda Function
+    const lambdaLogGroup = new logs.LogGroup(this, "Lambda Log Group", {
+      logGroupName: `/aws/lambda/${lambdaFunciton.functionName}`,
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: RemovalPolicy.DESTROY
+    });
+
+    // EventBridge
+    const event = new events.Rule(this, 'Lambda Function Event Every 5 minutes', {
+      schedule: events.Schedule.rate(Duration.minutes(5)),
+      targets: [new targets.LambdaFunction(lambdaFunciton)]
+    })
+  };
 }
