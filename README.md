@@ -1,14 +1,7 @@
-# Welcome to your CDK TypeScript project
+# AWS DataSync + Amazon EventBridgeでS3とEFSを5分置きに同期してみた
 
-This is a blank project for CDK development with TypeScript.
+[AWS DataSync + Amazon EventBridgeでS3とEFSを5分置きに同期してみた](https://dev.classmethod.jp/preview/post/947574?_wpnonce=9db15679a9)のサンプルコードです。
 
-The `cdk.json` file tells the CDK Toolkit how to execute your app.
+# 構成図
 
-## Useful commands
-
-* `npm run build`   compile typescript to js
-* `npm run watch`   watch for changes and compile
-* `npm run test`    perform the jest unit tests
-* `cdk deploy`      deploy this stack to your default AWS account/region
-* `cdk diff`        compare deployed stack with current state
-* `cdk synth`       emits the synthesized CloudFormation template
+![構成図](/images/datasync-lambda-eventbridge.png "構成図")
