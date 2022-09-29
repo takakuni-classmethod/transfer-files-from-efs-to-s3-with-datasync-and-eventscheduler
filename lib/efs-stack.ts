@@ -118,27 +118,45 @@ export class EfsStack extends Stack {
 
     const cfnInstance = instance.node.defaultChild as ec2.CfnInstance;
 
-    // EFS file system
-    const fileSystem = new efs.FileSystem(this, "EFS File System", {
+    const fileSystem = new efs.CfnFileSystem(this, "EfsFileSystem", {
+      lifecyclePolicies: [
+        {
+          transitionToIa: 'AFTER_14_DAYS',
+        },
+        {
+          transitionToPrimaryStorageClass: 'AFTER_1_ACCESS'
+        }
+      ],
+      encrypted: true,
+      performanceMode: 'generalPurpose',
+    });
+    fileSystem.applyRemovalPolicy(RemovalPolicy.DESTROY);
+
+    // EFS mount target
+    const fileSystemSg = new ec2.SecurityGroup(this, "EfsSecurityGroup" ,{
       vpc,
-      lifecyclePolicy: efs.LifecyclePolicy.AFTER_14_DAYS,
-      performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
-      outOfInfrequentAccessPolicy:
-        efs.OutOfInfrequentAccessPolicy.AFTER_1_ACCESS,
-      vpcSubnets: vpc.selectSubnets({
-        subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-      }),
-      removalPolicy: RemovalPolicy.DESTROY
+      allowAllOutbound: false
     });
 
-    fileSystem.connections.allowDefaultPortFrom(instance);
+    new ec2.Connections({
+      securityGroups: [fileSystemSg],
+      defaultPort: ec2.Port.tcp(2049),
+    });
+
+    fileSystemSg.connections.allowFrom(instance, ec2.Port.tcp(2049));
+
+    const mountTarget = new efs.CfnMountTarget(this, "EfsMountTarget", {
+      fileSystemId: fileSystem.attrFileSystemId,
+      securityGroups: [fileSystemSg.securityGroupId],
+      subnetId: vpc.isolatedSubnets[0].subnetId
+    });
 
     instance.userData.addCommands(
       "yum check-update -y",
       "yum upgrade -y",
       "yum install -y amazon-efs-utils",
       "yum install -y nfs-utils",
-      "file_system_id=" + fileSystem.fileSystemId,
+      "file_system_id=" + fileSystem.attrFileSystemId,
       "efs_mount_point=/mnt/efs",
       'mkdir -p "${efs_mount_point}"',
       'test -f "/sbin/mount.efs" && echo "${file_system_id}:/ ${efs_mount_point} efs defaults,_netdev" >> /etc/fstab || ' +
@@ -201,10 +219,11 @@ export class EfsStack extends Stack {
         ],
         subnetArn: `arn:aws:ec2:${this.region}:${this.account}:subnet/${vpc.isolatedSubnets[0].subnetId}`,
       },
-      efsFilesystemArn: fileSystem.fileSystemArn,
+      efsFilesystemArn: fileSystem.attrArn,
       inTransitEncryption: "TLS1_2",
       subdirectory: "/",
     });
+    locationEFS.addDependsOn(mountTarget);
 
     const locationS3 = new datasync.CfnLocationS3(this, "Location S3", {
       s3BucketArn: bucket.bucketArn,
