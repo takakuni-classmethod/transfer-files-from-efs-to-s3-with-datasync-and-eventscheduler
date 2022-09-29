@@ -16,38 +16,10 @@ export class EfsStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
 
-    // CloudWatch Logs for VPC Flow Logs
-    const vpcFlowLogsLogGroup = new logs.LogGroup(this, "VPC Flow Logs Log Group", {
-        logGroupName: `/aws/vendedlogs/vpcFlowLogs-${this.stackName}`,
-        retention: logs.RetentionDays.ONE_WEEK,
-        removalPolicy: RemovalPolicy.DESTROY
-      }
-    );
-
     // CloudWatch Logs for DataSync
     const datasyncLogGroup = new logs.LogGroup(this, "DataSync Log Group", {
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: RemovalPolicy.DESTROY
-    });
-
-    // VPC Flow Logs IAM Role
-    const vpcFlowLogsIAMRole = new iam.Role(this, "VPC Flow Logs IAM Role", {
-      assumedBy: new iam.ServicePrincipal("vpc-flow-logs.amazonaws.com"),
-      managedPolicies: [
-        new iam.ManagedPolicy(this, "FlowLogsIamPolicy", {
-          statements: [
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              actions: [
-                "logs:CreateLogStream",
-                "logs:PutLogEvents",
-                "logs:DescribeLogStreams",
-              ],
-              resources: [vpcFlowLogsLogGroup.logGroupArn],
-            }),
-          ],
-        }),
-      ],
     });
 
     // VPC
@@ -69,19 +41,6 @@ export class EfsStack extends Stack {
           cidrMask: 28,
         },
       ],
-    });
-
-    // Setting VPC Flow Logs
-    new ec2.CfnFlowLog(this, "VPC Flow Log", {
-      resourceId: vpc.vpcId,
-      resourceType: "VPC",
-      trafficType: "ALL",
-      deliverLogsPermissionArn: vpcFlowLogsIAMRole.roleArn,
-      logDestination: vpcFlowLogsLogGroup.logGroupArn,
-      logDestinationType: "cloud-watch-logs",
-      logFormat:
-        "${version} ${account-id} ${interface-id} ${srcaddr} ${dstaddr} ${srcport} ${dstport} ${protocol} ${packets} ${bytes} ${start} ${end} ${action} ${log-status} ${vpc-id} ${subnet-id} ${instance-id} ${tcp-flags} ${type} ${pkt-srcaddr} ${pkt-dstaddr} ${region} ${az-id} ${sublocation-type} ${sublocation-id} ${pkt-src-aws-service} ${pkt-dst-aws-service} ${flow-direction} ${traffic-path}",
-      maxAggregationInterval: 60,
     });
 
     // SSM IAM Role
@@ -234,7 +193,7 @@ export class EfsStack extends Stack {
       subdirectory: "/",
     });
 
-    new datasync.CfnTask(this, "DataSync Task", {
+    const task = new datasync.CfnTask(this, "DataSync Task", {
       name: "efs-to-s3",
       sourceLocationArn: locationEFS.attrLocationArn,
       destinationLocationArn: locationS3.attrLocationArn,
@@ -255,6 +214,19 @@ export class EfsStack extends Stack {
         verifyMode: "ONLY_FILES_TRANSFERRED",
       },
     });
+    datasyncLogGroup.addToResourcePolicy(new iam.PolicyStatement({
+      actions: ['logs:CreateLogStream', 'logs:PutLogEvents'],
+      principals: [new iam.ServicePrincipal('datasync.amazonaws.com')],
+      conditions: {
+        ArnLike: {
+          'aws:SourceArn': [task.attrTaskArn]
+        },
+        StringEquals: {
+          'aws:SourceAccount': this.account
+        }
+      },
+      resources: [datasyncLogGroup.logGroupArn]
+    }));
 
     new ec2.SecurityGroup(this, "All Deny Security Group", {
       vpc,
