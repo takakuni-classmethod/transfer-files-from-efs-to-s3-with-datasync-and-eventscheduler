@@ -2,4 +2,4 @@
 
 # 構成図
 
-![構成図](/images/datasync-lambda-eventbridge.png "構成図")
+![構成図](/images/transfer-efs-to-s3-datasync-with-eventbridgesheduler.png "構成図")
