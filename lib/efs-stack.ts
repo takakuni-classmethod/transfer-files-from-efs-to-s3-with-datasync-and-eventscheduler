@@ -12,7 +12,8 @@ import {
   aws_lambda as lambda,
   aws_events as events,
   aws_events_targets as targets,
-  Duration
+  Duration,
+  CfnOutput
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
 
@@ -25,6 +26,26 @@ export class EfsStack extends Stack {
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: RemovalPolicy.DESTROY
     });
+
+    datasyncLogGroup.addToResourcePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        principals: [new iam.ServicePrincipal('datasync.amazonaws.com')],
+        actions: [
+          'logs:PutLogEvents',
+          'logs:CreateLogStream'
+        ],
+        conditions: {
+          ArnLike: {
+            'aws:SourceArn': `arn:aws:datasync:${this.region}:${this.account}:task/*`
+          },
+          StringEquals: {
+            'aws:SourceAccount': this.account
+          }
+        },
+        resources: [`arn:aws:logs:${this.region}:${this.account}:log-group:*:*`]
+      })
+    );
 
     // VPC
     const vpc = new ec2.Vpc(this, "VPC", {
@@ -165,6 +186,14 @@ export class EfsStack extends Stack {
               ],
               resources: [`${bucket.bucketArn}/*`],
             }),
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                "logs:PutLogEvents",
+                "logs:CreateLogStream"
+              ],
+              resources: [`*`],
+            }),
           ],
         }),
       ],
@@ -220,73 +249,31 @@ export class EfsStack extends Stack {
       },
     });
 
-    datasyncLogGroup.addToResourcePolicy(new iam.PolicyStatement({
-      actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
-      principals: [new iam.ServicePrincipal("datasync.amazonaws.com")],
-      conditions: {
-        ArnLike: {
-          "aws:SourceArn": [datasyncTask.attrTaskArn]
-        },
-        StringEquals: {
-          "aws:SourceAccount": this.account
-        }
-      },
-      resources: [datasyncLogGroup.logGroupArn]
-    }));
-
-    new ec2.SecurityGroup(this, "All Deny Security Group", {
-      vpc,
-      allowAllOutbound: false,
-    });
-
-    // IAM Resources for Lambda Function
-    const lambdaRole = new iam.Role(this, "Lambda IAM Role", {
-      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+    // EventBridge Scheduler Role
+    const EventBridgeIAMRole = new iam.Role(this, "EventBridge Scheduler IAM Role", {
+      assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com"),
       managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName(
-          "service-role/AWSLambdaBasicExecutionRole"
-        )
-      ]
-    });
-
-    const lambdaPolicy = new iam.ManagedPolicy(this, "Lambda IAM Policy", {
-      statements: [
-        new iam.PolicyStatement({
-          effect: iam.Effect.ALLOW,
-          actions: ["datasync:StartTaskExecution"],
-          resources: [datasyncTask.attrTaskArn]
+        new iam.ManagedPolicy(this, "EventBridge Scheduler DataSync Access", {
+          statements: [
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                "datasync:StartTaskExecution",
+              ],
+              resources: [datasyncTask.attrTaskArn],
+            }),
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: ["ec2:DescribeNetworkInterfaces"],
+              resources: ["*"]
+            }),
+          ],
         }),
-        new iam.PolicyStatement({
-          effect: iam.Effect.ALLOW,
-          actions: ["ec2:DescribeNetworkInterfaces"],
-          resources: ["*"]
-        })
       ],
-      roles: [lambdaRole]
     });
 
-    // Lambda Function
-    const lambdaFunciton = new lambda.Function(this, "Lambda Function", {
-      runtime: lambda.Runtime.PYTHON_3_9,
-      handler: "index.lambda_handler",
-      role: lambdaRole,
-      code: lambda.Code.fromAsset("lambda"),
-      environment: {
-        taskArn: datasyncTask.attrTaskArn
-      }
+    new CfnOutput(this, 'datasyncTask', {
+      value: datasyncTask.attrTaskArn
     });
-
-    // CloudWatch Logs for Lambda Function
-    const lambdaLogGroup = new logs.LogGroup(this, "Lambda Log Group", {
-      logGroupName: `/aws/lambda/${lambdaFunciton.functionName}`,
-      retention: logs.RetentionDays.ONE_WEEK,
-      removalPolicy: RemovalPolicy.DESTROY
-    });
-
-    // EventBridge
-    const event = new events.Rule(this, 'Lambda Function Event Every 5 minutes', {
-      schedule: events.Schedule.rate(Duration.minutes(5)),
-      targets: [new targets.LambdaFunction(lambdaFunciton)]
-    })
   };
 }
